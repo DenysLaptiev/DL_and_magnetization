@@ -19,16 +19,20 @@ from torch.utils.data import Dataset, DataLoader
 # =============================
 
 # Параметры симуляции
-num_cells = 20           # для демонстрации – небольшая решётка
-num_steps = 10000        # число шагов Монте-Карло
-equil_steps = 500
+num_cells = 20           # число елементарных ячеек решётки
+num_steps = 10000        # общее число шагов симуляции Монте-Карло
+equil_steps = 500        # число шагов Монте-Карло для установления равновесия (не учитываются в измерениях).
 T = 1.0                 # фиксированная температура
-H_values = np.linspace(0, 10, 20)  # 50 точек для кривой M(H) от -5 до +5
+
+H_MIN = 0
+H_MAX = 10
+H_POINTS_NUMBER = 20
+H_values = np.linspace(H_MIN, H_MAX, H_POINTS_NUMBER)  # H_POINTS_NUMBER точек для кривой M(H) от H_MIN до H_MAX
 
 # Количество сэмплов в датасетах
-TRAIN_SAMPLES_NUMBER = 500
-VAL_SAMPLES_NUMBER = 100
-TEST_SAMPLES_NUMBER = 100
+TRAIN_SAMPLES_NUMBER = 5
+VAL_SAMPLES_NUMBER = 1
+TEST_SAMPLES_NUMBER = 1
 
 J_MIN = -1
 J_MAX = +1
@@ -39,8 +43,8 @@ J_MAX = +1
 # Определение нейронной сети для регрессии
 # =============================
 
-input_size = len(H_values)  # 50 значений кривой M(H)
-hidden_size = 64 # упростил сеть, чтоб избежать переобучения 64 -> 32
+input_size = len(H_values)  # число точек M для кривой M(H)
+hidden_size = 64 # число нейронов в скрытом слое
 output_size = 4             # предсказываем четыре параметра J
 DROPOUT_PARAMETER = 0.1 # 10% связей обрывается, чтобы избежать переобучение
 WEIGHT_DECAY_PARAMETER=1e-4 # штраф на большие веса, поможет избежать переобучения
@@ -189,7 +193,9 @@ def generate_sample(J_params, T, num_cells, num_steps, equil_steps, H_values, ve
 # Генерация случайных параметров J в диапазоне от J_MIN до J_MAX
 def random_J():
     # Генерация случайных параметров J в диапазоне от -2 до +2
-    return np.random.uniform(J_MIN, J_MAX, 4)
+    J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+    J2 = J1
+    return J1, J2, J3, J4
 
 
 
