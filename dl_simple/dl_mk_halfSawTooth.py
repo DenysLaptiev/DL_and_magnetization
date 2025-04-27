@@ -3,6 +3,8 @@ import random
 import matplotlib.pyplot as plt
 import logging
 
+from dl_molecule import math_utils
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
@@ -12,6 +14,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
+from scipy.stats import mode
+
 
 
 # =============================
@@ -19,6 +23,8 @@ from torch.utils.data import Dataset, DataLoader
 # =============================
 
 # Параметры симуляции
+COMPUTE_TYPE = 'analytical' # 'analytical', 'montecarlo'
+LATTICE_TYPE = 'simple' # 'general', 'decorated', 'molecule', 'simple'
 num_cells = 20           # число елементарных ячеек решётки
 num_steps = 10000        # общее число шагов симуляции Монте-Карло
 equil_steps = 500        # число шагов Монте-Карло для установления равновесия (не учитываются в измерениях).
@@ -26,13 +32,13 @@ T = 1.0                 # фиксированная температура
 
 H_MIN = 0
 H_MAX = 10
-H_POINTS_NUMBER = 20
+H_POINTS_NUMBER = 64
 H_values = np.linspace(H_MIN, H_MAX, H_POINTS_NUMBER)  # H_POINTS_NUMBER точек для кривой M(H) от H_MIN до H_MAX
 
 # Количество сэмплов в датасетах
-TRAIN_SAMPLES_NUMBER = 5
-VAL_SAMPLES_NUMBER = 1
-TEST_SAMPLES_NUMBER = 1
+TRAIN_SAMPLES_NUMBER = 10000
+VAL_SAMPLES_NUMBER = 2000
+TEST_SAMPLES_NUMBER = 2000
 
 J_MIN = -1
 J_MAX = +1
@@ -44,7 +50,7 @@ J_MAX = +1
 # =============================
 
 input_size = len(H_values)  # число точек M для кривой M(H)
-hidden_size = 64 # число нейронов в скрытом слое
+hidden_size = 128 # число нейронов в скрытом слое
 output_size = 4             # предсказываем четыре параметра J
 DROPOUT_PARAMETER = 0.1 # 10% связей обрывается, чтобы избежать переобучение
 WEIGHT_DECAY_PARAMETER=1e-4 # штраф на большие веса, поможет избежать переобучения
@@ -168,22 +174,43 @@ def monte_carlo_half_sawtooth(num_spins, neighbors, T, H, num_steps, equil_steps
 
 
 # Генерируем датасет. J_params = [J1, J2, J3, J4] и кривая намагниченности M(H) (H=H_values)
-def generate_sample(J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False):
+def generate_sample(compute_type, J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False):
     """
     Для заданного набора параметров J_params = [J1, J2, J3, J4] генерирует
     кривую намагниченности M(H) по значениям внешнего поля из H_values.
     """
-    J1, J2, J3, J4 = J_params
-    bonds = build_bonds(num_cells, J1, J2, J3, J4)
-    num_spins = 3 * num_cells + 1
-    neighbors = build_neighbors(num_spins, bonds)
-    mag_curve = []
-    for idx, H in enumerate(H_values):
-        m = monte_carlo_half_sawtooth(num_spins, neighbors, T, H, num_steps, equil_steps, verbose=verbose)
-        mag_curve.append(m)
-        if verbose:
-            logging.info(f"Generated sample: H[{idx}]={H:.2f}, M={m:.4f}")
-    return np.array(mag_curve)
+    if compute_type == 'montecarlo':
+        J1, J2, J3, J4 = J_params
+        bonds = build_bonds(num_cells, J1, J2, J3, J4)
+        num_spins = 3 * num_cells + 1
+        neighbors = build_neighbors(num_spins, bonds)
+        mag_curve = []
+        for idx, H in enumerate(H_values):
+            m = monte_carlo_half_sawtooth(num_spins, neighbors, T, H, num_steps, equil_steps, verbose=verbose)
+            mag_curve.append(m)
+            if verbose:
+                logging.info(f"Generated sample: H[{idx}]={H:.2f}, M={m:.4f}")
+        return np.array(mag_curve)
+    elif compute_type == 'analytical':
+
+        #!!!!! there is analytical solution only for 'decorated', 'simple' and 'molecule' lattice_type. No analytical solution for 'general' lattice_type (use 'montecarlo' for 'general')
+        J1, J2, J3, J4 = J_params
+        Jd = J1 #(J2=J1)
+        J = J3
+        Jt = J4
+        mag_curve = []
+        for idx, H in enumerate(H_values):
+            m = math_utils.m(J, Jd, Jt, H, T)
+            mag_curve.append(m)
+            if verbose:
+                logging.info(f"Generated sample: H[{idx}]={H:.2f}, M={m:.4f}")
+        return np.array(mag_curve)
+    else:
+        mag_curve = []
+        return np.array(mag_curve)
+
+
+
 
 
 # =============================
@@ -191,11 +218,31 @@ def generate_sample(J_params, T, num_cells, num_steps, equil_steps, H_values, ve
 # =============================
 
 # Генерация случайных параметров J в диапазоне от J_MIN до J_MAX
-def random_J():
+def random_J(lattice_type):
     # Генерация случайных параметров J в диапазоне от -2 до +2
-    J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
-    J2 = J1
-    return J1, J2, J3, J4
+
+    if lattice_type == 'general':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        return J1, J2, J3, J4
+    elif lattice_type == 'decorated':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        J2 = J1
+        return J1, J2, J3, J4
+    elif lattice_type == 'molecule':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        J2 = J1
+        J3 = J1
+        J4 = 0
+        return J1, J2, J3, J4
+    elif lattice_type == 'simple':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        J2 = J1
+        J3 = 0
+        J4 = J1
+        return J1, J2, J3, J4
+    else:
+        J1, J2, J3, J4 =0,0,0,0
+        return J1, J2, J3, J4
 
 
 
@@ -240,9 +287,9 @@ def generate_train_dataset():
     train_X = []
     train_Y = []
     for i in range(TRAIN_SAMPLES_NUMBER):
-        J_params = random_J()
+        J_params = random_J(LATTICE_TYPE)
         print('J_params=', J_params)
-        mag_curve = generate_sample(J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False)
+        mag_curve = generate_sample(COMPUTE_TYPE, J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False)
         train_X.append(mag_curve)
         train_Y.append(J_params)
         logging.info(f"Training sample {i + 1}/{TRAIN_SAMPLES_NUMBER} generated.")
@@ -256,8 +303,8 @@ def generate_validation_dataset():
     val_X = []
     val_Y = []
     for i in range(VAL_SAMPLES_NUMBER):
-        J_params = random_J()
-        mag_curve = generate_sample(J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False)
+        J_params = random_J(LATTICE_TYPE)
+        mag_curve = generate_sample(COMPUTE_TYPE, J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False)
         val_X.append(mag_curve)
         val_Y.append(J_params)
         logging.info(f"Validation sample {i + 1}/{VAL_SAMPLES_NUMBER} generated.")
@@ -271,8 +318,8 @@ def generate_test_dataset():
     test_X = []
     test_Y = []
     for i in range(TEST_SAMPLES_NUMBER):
-        J_params = random_J()
-        mag_curve = generate_sample(J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False)
+        J_params = random_J(LATTICE_TYPE)
+        mag_curve = generate_sample(COMPUTE_TYPE, J_params, T, num_cells, num_steps, equil_steps, H_values, verbose=False)
         test_X.append(mag_curve)
         test_Y.append(J_params)
         logging.info(f"Test sample {i + 1}/{TEST_SAMPLES_NUMBER} generated.")
@@ -369,16 +416,69 @@ def main():
         sample_input = torch.tensor(test_X, dtype=torch.float32)
         predictions = model(sample_input).numpy()
 
+    # Списки для хранения ошибок
+    absolute_errors = []
+    relative_errors = []
+
     print("Test Targets vs Predictions:")
     for target, pred in zip(test_Y, predictions):
         abs_error = np.abs(target - pred)
         # Для относительной ошибки избегаем деления на 0
         rel_error = np.where(np.abs(target) > 1e-6, abs_error / np.abs(target) * 100, 0)
+
+        absolute_errors.append(abs_error)
+        relative_errors.append(rel_error)
+
         print("Target:", target)
         print("Prediction:", pred)
         print("Absolute Error:", abs_error)
         print("Relative Error (%):", rel_error)
         print("----------")
+
+    # Находим максимумы и минимумы
+    max_abs_error = np.max(absolute_errors)
+    min_abs_error = np.min(absolute_errors)
+    max_rel_error = np.max(relative_errors)
+    min_rel_error = np.min(relative_errors)
+
+    # Находим наиболее часто встречающиеся значения
+    mode_abs_error = mode(absolute_errors).mode[0]
+    mode_rel_error = mode(relative_errors).mode[0]
+
+    # Выводим результаты
+    print("Maximum Absolute Error:", max_abs_error)
+    print("Minimum Absolute Error:", min_abs_error)
+    print("Maximum Relative Error (%):", max_rel_error)
+    print("Minimum Relative Error (%):", min_rel_error)
+    print("Most Common Absolute Error:", mode_abs_error)
+    print("Most Common Relative Error (%):", mode_rel_error)
+
+    # Построение первого графика (Абсолютная погрешность)
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(range(len(test_Y)), absolute_errors, marker='o', color='b', label='Absolute Error')
+    plt.title("Absolute Error vs Test Sample")
+    plt.xlabel("Test Sample Number")
+    plt.ylabel("Absolute Error")
+    plt.grid(True)
+    plt.legend()
+
+    # Построение второго графика (Относительная погрешность)
+    plt.subplot(1, 2, 2)
+    plt.plot(range(len(test_Y)), relative_errors, marker='o', color='r', label='Relative Error')
+    plt.title("Relative Error vs Test Sample")
+    plt.xlabel("Test Sample Number")
+    plt.ylabel("Relative Error (%)")
+    plt.grid(True)
+    plt.legend()
+
+    # Устанавливаем пределы для оси Y на графике относительной погрешности
+    plt.subplot(1, 2, 2).set_ylim(-1, 100)
+
+    # Показать графики
+    plt.tight_layout()
+    plt.savefig('dl_mk_simple_errors.png')
+    plt.show()
 
 
 if __name__ == '__main__':

@@ -11,9 +11,14 @@ T=0.25
 # J4=Jt
 
 
-J1=-1
-J3=-1
-J4=-1
+# J1=-1
+# J3=-1
+# J4=-1
+
+J_triangle = -1
+J1=J_triangle
+J3=J_triangle
+J4=0
 
 Jd=J1
 J=J3
