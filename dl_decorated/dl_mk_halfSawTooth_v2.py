@@ -25,7 +25,7 @@ from scipy.stats import mode
 
 # Параметры симуляции
 COMPUTE_TYPE = 'analytical' # 'analytical', 'montecarlo'
-LATTICE_TYPE = 'simple' # 'general', 'decorated', 'molecule', 'simple'
+LATTICE_TYPE = 'decorated' # 'general', 'decorated', 'molecule', 'simple'
 num_cells = 20           # число елементарных ячеек решётки
 num_steps = 10000        # общее число шагов симуляции Монте-Карло
 equil_steps = 500        # число шагов Монте-Карло для установления равновесия (не учитываются в измерениях).
@@ -261,23 +261,25 @@ class MagnetizationDataset(Dataset):
 
 
 
-
 # =============================
-# Определение нейронной сети для регрессии
+# Определение нейронной сети для регрессии (улучшенная версия)
 # =============================
 
-# Определение класса для нейронной сети
 class Net(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(Net, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=DROPOUT_PARAMETER)  # Dropout с заданным параметром
         self.fc2 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
-        x = self.relu(self.fc1(x))
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.dropout(x)  # Добавляем dropout только после активации скрытого слоя
         x = self.fc2(x)
         return x
+
 
 
 
@@ -401,7 +403,10 @@ def main():
     plt.savefig('dl_mk_learningCurve.png')
     plt.show()
 
-    # Оценка на тестовом датасете
+    # =============================
+    # Оценка на тестовом датасете с улучшенной обработкой ошибок
+    # =============================
+
     model.eval()
     test_loss = 0.0
     with torch.no_grad():
@@ -410,75 +415,80 @@ def main():
             loss = criterion(outputs, batch_Y)
             test_loss += loss.item() * batch_X.size(0)
     test_loss /= len(test_dataset)
-    logging.info(f"Test Loss: {test_loss:.4f}")
+    logging.info(f"Test Loss (MSE): {test_loss:.6f}")
 
-    # Сравнение предсказаний и истинных значений для тестовых сэмплов
+    # Предсказания на всём тестовом наборе
     with torch.no_grad():
         sample_input = torch.tensor(test_X, dtype=torch.float32)
         predictions = model(sample_input).numpy()
 
-    # Списки для хранения ошибок
-    absolute_errors = []
-    relative_errors = []
+    targets = np.array(test_Y)
 
-    print("Test Targets vs Predictions:")
-    for target, pred in zip(test_Y, predictions):
-        abs_error = np.abs(target - pred)
-        # Для относительной ошибки избегаем деления на 0
-        rel_error = np.where(np.abs(target) > 1e-6, abs_error / np.abs(target) * 100, 0)
+    # Абсолютные ошибки
+    absolute_errors = np.abs(targets - predictions)
+    mean_absolute_error = np.mean(absolute_errors)
+    median_absolute_error = np.median(absolute_errors)
 
-        absolute_errors.append(abs_error)
-        relative_errors.append(rel_error)
+    # Маска: только там, где истинные значения "достаточно далеко от нуля"
+    epsilon = 0.1
+    mask = np.abs(targets) > epsilon
 
-        print("Target:", target)
-        print("Prediction:", pred)
-        print("Absolute Error:", abs_error)
-        print("Relative Error (%):", rel_error)
-        print("----------")
+    # Относительные ошибки (с маской)
+    relative_errors = np.zeros_like(absolute_errors)
+    relative_errors[mask] = np.abs(targets[mask] - predictions[mask]) / np.abs(targets[mask]) * 100
 
-    # Находим максимумы и минимумы
-    max_abs_error = np.max(absolute_errors)
-    min_abs_error = np.min(absolute_errors)
-    max_rel_error = np.max(relative_errors)
-    min_rel_error = np.min(relative_errors)
+    mean_relative_error = np.mean(relative_errors[mask])
+    median_relative_error = np.median(relative_errors[mask])
 
-    # Находим наиболее часто встречающиеся значения
-    mode_abs_error = mode(absolute_errors).mode[0]
-    mode_rel_error = mode(relative_errors).mode[0]
+    # Вывод результатов
+    print("\n=== Test Set Evaluation ===")
+    print(f"Mean Absolute Error: {mean_absolute_error:.6f}")
+    print(f"Median Absolute Error: {median_absolute_error:.6f}")
+    print(f"Mean Relative Error (%): {mean_relative_error:.2f}")
+    print(f"Median Relative Error (%): {median_relative_error:.2f}")
+    print("============================\n")
 
-    # Выводим результаты
-    print("Maximum Absolute Error:", max_abs_error)
-    print("Minimum Absolute Error:", min_abs_error)
-    print("Maximum Relative Error (%):", max_rel_error)
-    print("Minimum Relative Error (%):", min_rel_error)
-    print("Most Common Absolute Error:", mode_abs_error)
-    print("Most Common Relative Error (%):", mode_rel_error)
+    # Построение графиков ошибок
+    plt.figure(figsize=(12, 5))
 
-    # Построение первого графика (Абсолютная погрешность)
-    plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    plt.plot(range(len(test_Y)), absolute_errors, marker='o', color='b', label='Absolute Error')
+    plt.plot(range(len(targets)), np.linalg.norm(absolute_errors, axis=1), marker='o', linestyle='', color='blue')
     plt.title("Absolute Error vs Test Sample")
     plt.xlabel("Test Sample Number")
-    plt.ylabel("Absolute Error")
+    plt.ylabel("Absolute Error (L2 norm)")
     plt.grid(True)
-    plt.legend()
 
-    # Построение второго графика (Относительная погрешность)
     plt.subplot(1, 2, 2)
-    plt.plot(range(len(test_Y)), relative_errors, marker='o', color='r', label='Relative Error')
-    plt.title("Relative Error vs Test Sample")
+    plt.plot(range(len(targets)), np.linalg.norm(relative_errors, axis=1), marker='o', linestyle='', color='red')
+    plt.title("Relative Error vs Test Sample (Filtered)")
     plt.xlabel("Test Sample Number")
     plt.ylabel("Relative Error (%)")
+    plt.ylim(-1, 100)
     plt.grid(True)
-    plt.legend()
 
-    # Устанавливаем пределы для оси Y на графике относительной погрешности
-    plt.subplot(1, 2, 2).set_ylim(-1, 100)
-
-    # Показать графики
     plt.tight_layout()
-    plt.savefig('dl_mk_simple_errors.png')
+    plt.savefig('dl_mk_decorated_errors_improved.png')
+    plt.show()
+
+    # =============================
+    # Визуализация "Истина vs Предсказание" для каждого параметра J
+    # =============================
+
+    param_names = ['J1', 'J2', 'J3', 'J4']
+
+    plt.figure(figsize=(16, 4))
+    for i in range(4):
+        plt.subplot(1, 4, i + 1)
+        plt.scatter(targets[:, i], predictions[:, i], alpha=0.5)
+        plt.xlim(J_MIN, J_MAX)
+        plt.ylim(J_MIN, J_MAX)
+        plt.plot([J_MIN, J_MAX], [J_MIN, J_MAX], 'r--')  # Диагональ "идеальных предсказаний"
+        plt.xlabel(f'True {param_names[i]}')
+        plt.ylabel(f'Predicted {param_names[i]}')
+        plt.title(f'{param_names[i]} Prediction')
+        plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('dl_mk_true_vs_pred.png')
     plt.show()
 
 

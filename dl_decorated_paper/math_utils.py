@@ -31,8 +31,6 @@ Hs = np.linspace(H_MIN, H_MAX, H_POINTS_NUMBER)  # H_POINTS_NUMBER точек д
 
 
 
-
-
 def R11(x, y, z, hp):
     return 2 * np.exp(x + 2 * hp) * np.cosh(z + hp) + 2 * np.exp(-x) * np.cosh(hp)
 
@@ -91,6 +89,24 @@ def matrix_det(matrix):
     return np.linalg.det(matrix)
 
 
+# def lam(J, Jd, Jt, h, T):
+#     var_x = x(J, Jd, Jt, T)
+#     var_y = y(J, Jd, Jt, T)
+#     var_z = z(J, Jd, Jt, T)
+#     var_hp = hp(h, T)
+#
+#     elementR11 = R11(var_x, var_y, var_z, var_hp)
+#     elementR12 = R12(var_x, var_y, var_z, var_hp)
+#     elementR21 = R21(var_x, var_y, var_z, var_hp)
+#     elementR22 = R22(var_x, var_y, var_z, var_hp)
+#
+#     matrixR = create_matrix(elementR11, elementR12, elementR21, elementR22)
+#
+#     trace = matrix_trace(matrixR)
+#     det = matrix_det(matrixR)
+#
+#     return 1 / 2 * (trace + np.sqrt((trace) ** 2 - 4 * det))
+
 def lam(J, Jd, Jt, h, T):
     var_x = x(J, Jd, Jt, T)
     var_y = y(J, Jd, Jt, T)
@@ -112,7 +128,6 @@ def lam(J, Jd, Jt, h, T):
     val_under_sqrt = (trace) ** 2 - 4 * det
     val_under_sqrt_clamped = np.clip(val_under_sqrt, a_min=0.0, a_max=None)
     return 0.5 * (trace + np.sqrt(val_under_sqrt_clamped))
-
     #return 1 / 2 * (trace + np.sqrt((trace) ** 2 - 4 * det))
 
 

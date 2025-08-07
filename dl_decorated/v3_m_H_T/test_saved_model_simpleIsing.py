@@ -1,0 +1,294 @@
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+import logging
+
+from torch.utils.data import Dataset, DataLoader
+from dl_molecule import math_utils
+
+# ============================
+# Параметры
+# ============================
+
+MODEL_SAVE_PATH = 'model_decorated.pth'
+H_MIN = 0
+H_MAX = 10
+H_POINTS_NUMBER = 64
+H_values = np.linspace(H_MIN, H_MAX, H_POINTS_NUMBER)
+
+#T = 1.0
+T_MIN, T_MAX, T_POINTS_NUMBER = 0.1, 1.0, 8
+T_values = np.linspace(T_MIN, T_MAX, T_POINTS_NUMBER)
+
+num_cells = 20
+J_MIN = -1
+J_MAX = +1
+
+TEST_SAMPLES_NUMBER = 5000
+BATCH_SIZE_PARAMETER = 64
+
+# TEST_SAMPLES_NUMBER = 200
+# BATCH_SIZE_PARAMETER = 32
+
+# ============================
+# Нормализация данных
+# ============================
+
+# def normalize(X):
+#     mean = np.mean(X, axis=1, keepdims=True)
+#     std = np.std(X, axis=1, keepdims=True) + 1e-8
+#     return (X - mean) / std
+
+def normalize_2d(X):
+    # X shape: (N, T, H)
+    mean = X.mean(axis=(1,2), keepdims=True)
+    std  = X.std (axis=(1,2), keepdims=True) + 1e-8
+    return (X - mean) / std
+
+# ============================
+# Генерация тестовых данных
+# ============================
+
+def random_J():
+    J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+    J2 = J1
+    return J1, J2, J3, J4
+
+# Генерация случайных параметров J в диапазоне от J_MIN до J_MAX
+def random_J(lattice_type):
+    # Генерация случайных параметров J в диапазоне от -2 до +2
+
+    if lattice_type == 'general':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        return J1, J2, J3, J4
+    elif lattice_type == 'decorated':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        J2 = J1
+        return J1, J2, J3, J4
+    elif lattice_type == 'molecule':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        J2 = J1
+        J3 = J1
+        J4 = 0
+        return J1, J2, J3, J4
+    elif lattice_type == 'simple':
+        J1, J2, J3, J4 = np.random.uniform(J_MIN, J_MAX, 4)
+        J2 = J1
+        J3 = 0
+        J4 = J1
+        return J1, J2, J3, J4
+    else:
+        J1, J2, J3, J4 =0,0,0,0
+        return J1, J2, J3, J4
+
+# def generate_sample(J_params):
+#     J1, J2, J3, J4 = J_params
+#     Jd = J1
+#     J = J3
+#     Jt = J4
+#     mag_curve = [math_utils.m(J, Jd, Jt, H, T) for H in H_values]
+#     return np.array(mag_curve)
+
+def generate_sample_2d(J_params):
+    J1, J2, J3, J4 = J_params
+    Jd, J, Jt = J1, J3, J4
+
+    # создаём карту shape=(T_points, H_points)
+    mag_map = np.zeros((len(T_values), len(H_values)), dtype=np.float32)
+    for ti, T in enumerate(T_values):
+        mag_map[ti] = [math_utils.m(J, Jd, Jt, H, T) for H in H_values]
+    return mag_map
+
+class MagnetizationDataset(Dataset):
+    def __init__(self, samples, targets):
+        # self.samples = torch.tensor(samples, dtype=torch.float32)
+        # self.targets = torch.tensor(targets, dtype=torch.float32)
+
+        # samples: numpy array (N, T, H)
+        self.samples = torch.tensor(samples, dtype=torch.float32).unsqueeze(1)
+        # теперь shape будет (N, 1, T, H) — пригодится для 2D-CNN
+        self.targets = torch.tensor(targets, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        return self.samples[idx], self.targets[idx]
+
+# ============================
+# Модель
+# ============================
+
+import torch.nn as nn
+
+input_size = len(H_values)
+hidden_size_1 = 256
+hidden_size_2 = 128
+output_size = 4
+DROPOUT_PARAMETER = 0.1
+
+# class Net(nn.Module):
+#     def __init__(self):
+#         super(Net, self).__init__()
+#         self.fc1 = nn.Linear(input_size, hidden_size_1)
+#         self.bn1 = nn.BatchNorm1d(hidden_size_1)
+#         self.fc2 = nn.Linear(hidden_size_1, hidden_size_2)
+#         self.bn2 = nn.BatchNorm1d(hidden_size_2)
+#         self.fc3 = nn.Linear(hidden_size_2, output_size)
+#         self.dropout = nn.Dropout(DROPOUT_PARAMETER)
+#         self.relu = nn.ReLU()
+#
+#     def forward(self, x):
+#         x = self.fc1(x)
+#         x = self.bn1(x)
+#         x = self.relu(x)
+#         x = self.dropout(x)
+#         x = self.fc2(x)
+#         x = self.bn2(x)
+#         x = self.relu(x)
+#         x = self.dropout(x)
+#         x = self.fc3(x)
+#         return x
+
+class Net2D(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # вход: (batch, 1, T, H)
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.bn1   = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.bn2   = nn.BatchNorm2d(32)
+        self.pool  = nn.MaxPool2d(2)
+        # после двух пуллингов размер станет (32, T/2/2, H/2/2)
+        flattened_size = 32 * (T_POINTS_NUMBER//4) * (H_POINTS_NUMBER//4)
+        self.fc1   = nn.Linear(flattened_size, 128)
+        self.fc2   = nn.Linear(128, 4)
+        self.relu  = nn.ReLU()
+        self.drop  = nn.Dropout(0.1)
+
+    def forward(self, x):
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.pool(x)
+        x = self.relu(self.bn2(self.conv2(x)))
+        x = self.pool(x)
+        x = x.flatten(1)
+        x = self.drop(self.relu(self.fc1(x)))
+        return self.fc2(x)
+
+# ============================
+# Основная функция
+# ============================
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+
+    # Загрузка модели
+    #model = Net()
+    model = Net2D()
+    model.load_state_dict(torch.load(MODEL_SAVE_PATH))
+    model.eval()
+    logging.info(f"Loaded model from {MODEL_SAVE_PATH}")
+
+    # Генерация тестового датасета
+    test_X = []
+    test_Y = []
+    for _ in range(TEST_SAMPLES_NUMBER):
+        J_params = random_J('simple')
+        # mag_curve = generate_sample(J_params)
+        mag_curve = generate_sample_2d(J_params)
+        test_X.append(mag_curve)
+        test_Y.append(J_params)
+
+    # test_X = normalize(np.array(test_X))
+    test_X = normalize_2d(np.array(test_X))
+    test_Y = np.array(test_Y)
+
+    test_dataset = MagnetizationDataset(test_X, test_Y)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE_PARAMETER, shuffle=False)
+
+    # ======= sanity checks ========
+    batch_X, batch_Y = next(iter(test_loader))
+    assert batch_X.shape == (BATCH_SIZE_PARAMETER, 1, T_POINTS_NUMBER, H_POINTS_NUMBER), \
+        f"Expected input shape {(BATCH_SIZE_PARAMETER,1,T_POINTS_NUMBER,H_POINTS_NUMBER)}, got {batch_X.shape}"
+    assert batch_Y.shape == (BATCH_SIZE_PARAMETER, 4), \
+        f"Expected target shape {(BATCH_SIZE_PARAMETER,4)}, got {batch_Y.shape}"
+    # ===============================
+
+    # Оценка модели
+    predictions = []
+    targets = []
+
+    with torch.no_grad():
+        for batch_X, batch_Y in test_loader:
+            outputs = model(batch_X)
+            predictions.append(outputs.numpy())
+            targets.append(batch_Y.numpy())
+
+    predictions = np.vstack(predictions)
+    targets = np.vstack(targets)
+
+    # Абсолютные ошибки
+    absolute_errors = np.abs(targets - predictions)
+    mean_absolute_error = np.mean(absolute_errors)
+    median_absolute_error = np.median(absolute_errors)
+
+    # Маска для относительных ошибок
+    epsilon = 0.1
+    mask = np.abs(targets) > epsilon
+
+    relative_errors = np.zeros_like(absolute_errors)
+    relative_errors[mask] = np.abs(targets[mask] - predictions[mask]) / np.abs(targets[mask]) * 100
+
+    mean_relative_error = np.mean(relative_errors[mask])
+    median_relative_error = np.median(relative_errors[mask])
+
+    # Вывод результатов
+    print("\n=== Test Set Evaluation ===")
+    print(f"Mean Absolute Error: {mean_absolute_error:.6f}")
+    print(f"Median Absolute Error: {median_absolute_error:.6f}")
+    print(f"Mean Relative Error (%): {mean_relative_error:.2f}")
+    print(f"Median Relative Error (%): {median_relative_error:.2f}")
+    print("============================\n")
+
+    # Построение графиков ошибок
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(range(len(targets)), np.linalg.norm(absolute_errors, axis=1), marker='o', linestyle='', color='blue')
+    plt.title("Absolute Error vs Test Sample")
+    plt.xlabel("Test Sample Number")
+    plt.ylabel("Absolute Error (L2 norm)")
+    plt.grid(True)
+
+    plt.subplot(1, 2, 2)
+    plt.plot(range(len(targets)), np.linalg.norm(relative_errors, axis=1), marker='o', linestyle='', color='red')
+    plt.title("Relative Error vs Test Sample (Filtered)")
+    plt.xlabel("Test Sample Number")
+    plt.ylabel("Relative Error (%)")
+    plt.ylim(-1, 100)
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.savefig('dl_mk_decorated_errors_improved_simpleIsing.png')
+    plt.show()
+
+    # Визуализация "Истина vs Предсказание"
+    param_names = ['J1', 'J2', 'J3', 'J4']
+
+    plt.figure(figsize=(16, 4))
+    for i in range(4):
+        plt.subplot(1, 4, i + 1)
+        plt.scatter(targets[:, i], predictions[:, i], alpha=0.5)
+        plt.xlim(J_MIN, J_MAX)
+        plt.ylim(J_MIN, J_MAX)
+        plt.plot([J_MIN, J_MAX], [J_MIN, J_MAX], 'r--')
+        plt.xlabel(f'True {param_names[i]}')
+        plt.ylabel(f'Predicted {param_names[i]}')
+        plt.title(f'{param_names[i]} Prediction')
+        plt.grid(True)
+    plt.tight_layout()
+    plt.savefig('dl_mk_true_vs_pred_decorated_simpleIsing.png')
+    plt.show()
+
+if __name__ == "__main__":
+    main()
