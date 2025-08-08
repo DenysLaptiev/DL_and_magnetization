@@ -15,6 +15,7 @@ from dl_decorated_paper import math_utils
 #--------------File names
 TRAINED_MODEL_FILE = 'model_decorated_mH.pth'
 RESULT_EXPECTED_AND_ACTUAL_PLOT_FILE = 'dl_mk_true_vs_pred_decorated_mHT_moleculeIsing.png'
+RESIDUALS_HIST_FILE            = 'dl_residuals_hist_molecule.png'
 
 #--------------PhysicalSystem parameters
 LATTICE_TYPE = 'molecule'
@@ -166,7 +167,7 @@ def main():
     test_X = []
     test_Y = []
     for _ in range(TEST_SAMPLES_NUMBER):
-        J_params = random_J()
+        J_params = random_J(LATTICE_TYPE)
         mag_curve = generate_sample(J_params)
         test_X.append(mag_curve)
         test_Y.append(J_params)
@@ -252,6 +253,80 @@ def main():
     plt.tight_layout()
     plt.savefig(RESULT_EXPECTED_AND_ACTUAL_PLOT_FILE)
     plt.show()
+
+    # 4) Абсолютные и квадратичные ошибки
+    errors = predictions - targets
+    abs_err = np.abs(errors)
+    mse_per_j = np.mean(errors ** 2, axis=0)
+    rmse_per_j = np.sqrt(mse_per_j)
+
+    # 5) R² per parameter
+    var_true = np.var(targets, axis=0)
+    r2_per_j = 1.0 - mse_per_j / var_true
+
+    # 6) Печать таблицы метрик
+    '''
+    MAE — MAE (Mean Absolute Error). Среднее абсолютное отклонение предсказания от истинного
+    RMSE — RMSE (Root Mean Squared Error). Корень из среднего квадратичного отклонения. Чувствительнее к большим ошибкам (больше штрафует за крупные выбросы), чем MAE.
+    R2 — коэффициент детерминации. Показывает, какую долю дисперсии (разброса) истинных значений параметра модель «объясняет»
+        – R²≈1 означает почти идеальную подгонку;
+        – R²≈0 — модель не лучше константы (среднего);
+        – R²<0 — хуже, чем просто предсказывать среднее.
+    '''
+    param_names = ['J1', 'J2', 'J3', 'J4']
+    print("\nParameter |   MAE    |   RMSE   |    R²   ")
+    print("-----------------------------------------")
+    for i, name in enumerate(param_names):
+        mae = np.mean(abs_err[:, i])
+        print(f"   {name:2s}     | {mae:7.4f} | {rmse_per_j[i]:7.4f} | {r2_per_j[i]:7.4f}")
+    print()
+
+    # 7) Parity-plots (истина vs предсказание)
+    plt.figure(figsize=(16, 4))
+    for i, name in enumerate(param_names):
+        ax = plt.subplot(1, 4, i + 1)
+        ax.scatter(targets[:, i], predictions[:, i], alpha=0.4, s=10)
+        ax.plot([J_MIN, J_MAX], [J_MIN, J_MAX], 'r--')
+        ax.set_title(f"{name}: R²={r2_per_j[i]:.3f}")
+        ax.set_xlabel("True")
+        ax.set_ylabel("Pred")
+    plt.tight_layout()
+    plt.savefig('R2' + RESULT_EXPECTED_AND_ACTUAL_PLOT_FILE)
+    plt.show()
+
+    # 8) Гистограммы остатков
+
+    '''
+    1) Остаток = Predicted − True.
+    Справа от нуля — сеть завышает, слева — занижает.
+
+    2) Среднее остатка (mean). 
+    Оно близко к 0 → системного смещения почти нет.
+
+    3) Разброс (std)
+    Стандартное отклонение — «ширина» распределения ошибок. Чем меньше, тем точнее.
+
+    4) Форма/симметрия/«хвосты»
+    Узкий, симметричный «колокол» вокруг нуля — хорошо.
+    Тяжёлые хвосты/асимметрия → есть редкие большие ошибки или систематическое смещение в отдельных зонах пространства параметров.
+    У J3/J4 хвосты тяжелее и std больше → именно там модель ошибается сильнее (что согласуется с более низким R²).
+
+    5)Зачем это нужно:
+    Проверить смещение модели (bias): среднее далеко от 0 → модель систематически завышает/занижает.
+    Понять устойчивость: тяжелые хвосты → есть области (часто около фазовых переходов/плато m(H), где обратная задача плохо обусловлена), где ошибка резко растёт.
+    Связать с таблицей метрик: гистограммы объясняют, почему у J3/J4 MAE/RMSE хуже — распределения шире.
+    '''
+    plt.figure(figsize=(12, 8))
+    for i, name in enumerate(param_names):
+        ax = plt.subplot(2, 2, i + 1)
+        ax.hist(errors[:, i], bins=50, alpha=0.7)
+        ax.set_title(f"Residuals of {name}\nmean={errors[:, i].mean():.3f}, std={errors[:, i].std():.3f}")
+        ax.set_xlabel("Predicted − True")
+        ax.set_ylabel("Count")
+    plt.tight_layout()
+    plt.savefig(RESIDUALS_HIST_FILE)
+    plt.show()
+
 
 if __name__ == "__main__":
     main()
